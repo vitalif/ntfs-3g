@@ -1070,6 +1070,16 @@ static void do_ioctl(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
     	fuse_reply_err(req, ENOSYS);
 }
 
+static void do_fiemap(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
+{
+    struct fuse_fiemap_in *arg = (struct fuse_fiemap_in *) inarg;
+
+    if (req->f->op.fiemap)
+        req->f->op.fiemap(req, nodeid, arg->start, arg->len, arg->flags, arg->extents_max);
+    else
+        fuse_reply_err(req, ENOSYS);
+}
+
 static void do_init(fuse_req_t req, fuse_ino_t nodeid, const void *inarg)
 {
     const struct fuse_init_in *arg = (const struct fuse_init_in *) inarg;
@@ -1266,6 +1276,7 @@ static struct {
     [FUSE_BMAP]        = { do_bmap,        "BMAP"        },
     [FUSE_IOCTL]       = { do_ioctl,       "IOCTL"       },
     [FUSE_DESTROY]     = { do_destroy,     "DESTROY"     },
+    [FUSE_FIEMAP]      = { do_fiemap,      "FIEMAP"      },
 };
 
 #define FUSE_MAXOP (sizeof(fuse_ll_ops) / sizeof(fuse_ll_ops[0]))

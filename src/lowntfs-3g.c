@@ -2980,6 +2980,95 @@ done :
 		fuse_reply_bmap(req, lidx);
 }
 
+static void ntfs_fuse_fiemap(fuse_req_t req, fuse_ino_t ino,
+		uint64_t start, uint64_t len, uint32_t flags, uint32_t extents_max)
+{
+	ntfs_inode *ni;
+	ntfs_attr *na;
+	VCN v_start = start / ctx->vol->cluster_size;
+	VCN v_end = (start + len + ctx->vol->cluster_size-1) / ctx->vol->cluster_size;
+	int i, ret = 0;
+	void *buf = NULL;
+	uint32_t extents_mapped = 0;
+	struct fuse_fiemap_extent *extents;
+	u32 cl = ctx->vol->cluster_size;
+
+	buf = malloc(sizeof(uint32_t) + sizeof(struct fuse_fiemap_extent) * extents_max);
+	if (!buf) {
+		ret = -ENOMEM;
+		goto done;
+	}
+	extents = (struct fuse_fiemap_extent *)(buf + sizeof(uint32_t));
+
+	ni = ntfs_inode_open(ctx->vol, INODE(ino));
+	if (!ni) {
+		ret = -errno;
+		goto done;
+	}
+
+	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
+	if (!na) {
+		ret = -errno;
+		goto close_inode;
+	}
+
+	if ((na->data_flags & (ATTR_COMPRESSION_MASK | ATTR_IS_ENCRYPTED))
+			 || !NAttrNonResident(na)) {
+		ret = -EINVAL;
+		goto close_attr;
+	}
+
+	if (ntfs_attr_map_whole_runlist(na)) {
+		ret = -errno;
+		goto close_attr;
+	}
+
+	if (!na->rl) {
+		// No extents mapped yet
+		goto close_attr;
+	}
+
+	if (!extents_max) {
+		// Only count extents
+		for (i = 0; na->rl[i].length; i++) {
+			if (na->rl[i].lcn >= (LCN)0 && v_start < na->rl[i+1].vcn && v_end > na->rl[i].vcn) {
+				extents_mapped++;
+			}
+		}
+	} else {
+		for (i = 0; na->rl[i].length && v_end > na->rl[i].vcn && extents_mapped < extents_max; i++) {
+			if (na->rl[i].lcn >= (LCN)0 && v_start < na->rl[i+1].vcn) {
+				extents->logical = na->rl[i].vcn*cl;
+				extents->physical = na->rl[i].lcn*cl;
+				extents->length = na->rl[i].length*cl;
+				extents->flags = 0;
+				extents->padding = 0;
+				extents_mapped++;
+				extents++;
+			}
+		}
+		if (!na->rl[i].length && extents_mapped > 0) {
+			extents--;
+			extents->flags = FUSE_FIEMAP_EXTENT_LAST;
+		}
+	}
+
+close_attr:
+	ntfs_attr_close(na);
+close_inode:
+	if (ntfs_inode_close(ni))
+		set_fuse_error(&ret);
+done :
+	if (ret < 0)
+		fuse_reply_err(req, -ret);
+	else {
+		*((uint32_t*)buf) = extents_mapped;
+		fuse_reply_buf(req, buf, sizeof(uint32_t) + sizeof(struct fuse_fiemap_extent) * (extents_max ? extents_mapped : 0));
+	}
+	if (buf)
+		free(buf);
+}
+
 #ifdef HAVE_SETXATTR
 
 /*
@@ -3890,6 +3979,7 @@ static struct fuse_lowlevel_ops ntfs_3g_ops = {
 	.fsync		= ntfs_fuse_fsync,
 	.fsyncdir	= ntfs_fuse_fsync,
 	.bmap		= ntfs_fuse_bmap,
+	.fiemap		= ntfs_fuse_fiemap,
 	.destroy	= ntfs_fuse_destroy2,
 #if defined(FUSE_INTERNAL) || (FUSE_VERSION >= 28)
 	.ioctl		= ntfs_fuse_ioctl,

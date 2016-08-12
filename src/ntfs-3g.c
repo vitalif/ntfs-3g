@@ -2778,6 +2778,82 @@ close_inode:
 	return ret;
 }
 
+static int ntfs_fuse_fiemap(const char *path, uint64_t start, uint64_t len,
+	uint32_t flags, uint32_t extents_max, uint32_t *extents_mapped, struct fuse_fiemap_extent *extents)
+{
+	ntfs_inode *ni;
+	ntfs_attr *na;
+	VCN v_start = start / ctx->vol->cluster_size;
+	VCN v_end = (start + len + ctx->vol->cluster_size-1) / ctx->vol->cluster_size;
+	int i, ret = 0;
+	uint32_t em = 0;
+	u32 cl = ctx->vol->cluster_size;
+
+	if (ntfs_fuse_is_named_data_stream(path))
+		return -EINVAL;
+
+	ni = ntfs_pathname_to_inode(ctx->vol, NULL, path);
+	if (!ni)
+		return -errno;
+
+	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
+	if (!na) {
+		ret = -errno;
+		goto close_inode;
+	}
+
+	if ((na->data_flags & (ATTR_COMPRESSION_MASK | ATTR_IS_ENCRYPTED))
+			 || !NAttrNonResident(na)) {
+		ret = -EINVAL;
+		goto close_attr;
+	}
+
+	if (ntfs_attr_map_whole_runlist(na)) {
+		ret = -errno;
+		goto close_attr;
+	}
+
+	if (!na->rl) {
+		// No extents mapped yet
+		goto close_attr;
+	}
+
+	if (!extents_max) {
+		// Only count extents
+		for (i = 0; na->rl[i].length; i++) {
+			if (na->rl[i].lcn >= (LCN)0 && v_start < na->rl[i+1].vcn && v_end > na->rl[i].vcn) {
+				em++;
+			}
+		}
+	} else {
+		struct fuse_fiemap_extent *e = extents;
+		for (i = 0; na->rl[i].length && v_end > na->rl[i].vcn && em < extents_max; i++) {
+			if (na->rl[i].lcn >= (LCN)0 && v_start < na->rl[i+1].vcn) {
+				e->logical = na->rl[i].vcn*cl;
+				e->physical = na->rl[i].lcn*cl;
+				e->length = na->rl[i].length*cl;
+				e->flags = 0;
+				e->padding = 0;
+				em++;
+				e++;
+			}
+		}
+		if (!na->rl[i].length && em > 0) {
+			e--;
+			e->flags = FUSE_FIEMAP_EXTENT_LAST;
+		}
+	}
+	(*extents_mapped) = em;
+
+close_attr:
+	ntfs_attr_close(na);
+close_inode:
+	if (ntfs_inode_close(ni))
+		set_fuse_error(&ret);
+
+	return ret;
+}
+
 #ifdef HAVE_SETXATTR
 
 /*
@@ -3696,6 +3772,7 @@ static struct fuse_operations ntfs_3g_ops = {
 	.fsync		= ntfs_fuse_fsync,
 	.fsyncdir	= ntfs_fuse_fsync,
 	.bmap		= ntfs_fuse_bmap,
+	.fiemap		= ntfs_fuse_fiemap,
 	.destroy        = ntfs_fuse_destroy2,
 #if defined(FUSE_INTERNAL) || (FUSE_VERSION >= 28)
         .ioctl		= ntfs_fuse_ioctl,

@@ -804,6 +804,27 @@ struct fuse_lowlevel_ops {
 	void (*bmap) (fuse_req_t req, fuse_ino_t ino, size_t blocksize,
 		      uint64_t idx);
 	/**
+	 * Map file range to filesystem blocks, returning extents
+	 *
+	 * Just like bmap, this makes sense only for block device backed
+	 * filesystems mounted with the 'blkdev' option.
+	 *
+	 * Valid replies:
+	 *   fuse_reply_fiemap
+	 *   fuse_reply_err
+	 *
+	 * @param req request handle
+	 * @param ino the inode number
+	 * @param flags FUSE_FIEMAP_FLAG_* operation flags
+	 * @param extents_max Maximum count of extents allowed for reply.
+	 *   If zero, the reply should not contain any extents, but the
+	 *   count of extents in the given range should still be returned.
+	 * @param start Starting offset within file
+	 * @param len Length of mapped range
+	 */
+	void (*fiemap) (fuse_req_t req, fuse_ino_t ino, uint64_t start,
+		uint64_t len, uint32_t flags, uint32_t extents_max);
+	/**
 	 * Ioctl
 	 *
 	 * Note: For unrestricted ioctls (not allowed for FUSE

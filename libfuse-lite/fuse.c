@@ -1031,6 +1031,19 @@ int fuse_fs_bmap(struct fuse_fs *fs, const char *path, size_t blocksize,
         return -ENOSYS;
 }
 
+int fuse_fs_fiemap(struct fuse_fs *fs, const char *path, uint64_t start,
+        uint64_t len, uint32_t flags, uint32_t extents_max,
+        uint32_t *extents_mapped, struct fuse_fiemap_extent *extents)
+{
+    fuse_get_context()->private_data = fs->user_data;
+    if (fs->op.fiemap) {
+        return fs->op.fiemap(path, start, len, flags,
+            extents_max, extents_mapped, extents);
+    } else {
+        return -ENOSYS;
+    }
+}
+
 int fuse_fs_removexattr(struct fuse_fs *fs, const char *path, const char *name)
 {
     fuse_get_context()->private_data = fs->user_data;
@@ -2790,6 +2803,56 @@ out:
     free(out_buf);
 }
 
+static int common_fiemap(struct fuse *f, fuse_req_t req, fuse_ino_t ino,
+        uint64_t start, uint64_t len, uint32_t flags, uint32_t extents_max,
+        uint32_t *extents_mapped, struct fuse_fiemap_extent *extents)
+{
+    char *path;
+    int err = -ENOENT;
+
+    path = get_path(f, ino);
+    if (path != NULL) {
+        struct fuse_intr_data d;
+        fuse_prepare_interrupt(f, req, &d);
+        err = fuse_fs_fiemap(f->fs, path, start, len, flags,
+            extents_max, extents_mapped, extents);
+        fuse_finish_interrupt(f, req, &d);
+        free(path);
+    }
+    return err;
+}
+
+static void fuse_lib_fiemap(fuse_req_t req, fuse_ino_t ino, uint64_t start,
+        uint64_t len, uint32_t flags, uint32_t extents_max)
+{
+    struct fuse *f = req_fuse_prepare(req);
+    int res;
+
+    if (extents_max) {
+        void *buf = malloc(sizeof(uint32_t) + sizeof(struct fuse_fiemap_extent) * extents_max);
+        if (buf == NULL) {
+            reply_err(req, -ENOMEM);
+            return;
+        }
+        *(uint32_t*)buf = 0;
+        res = common_fiemap(f, req, ino, start, len, flags, extents_max,
+            (uint32_t*)buf, (struct fuse_fiemap_extent *)(buf + sizeof(uint32_t)));
+        if (!res)
+            fuse_reply_buf(req, buf, sizeof(uint32_t) + sizeof(struct fuse_fiemap_extent) * (*(uint32_t*)buf));
+        else
+            reply_err(req, res);
+        free(buf);
+    } else {
+        uint32_t extents_mapped = 0;
+        res = common_fiemap(f, req, ino, start, len, flags, 0,
+            &extents_mapped, NULL);
+        if (!res)
+            fuse_reply_buf(req, (char *)&extents_mapped, sizeof(extents_mapped));
+        else
+            reply_err(req, res);
+    }
+}
+
 static struct fuse_lowlevel_ops fuse_path_ops = {
     .init = fuse_lib_init,
     .destroy = fuse_lib_destroy,
@@ -2826,6 +2889,7 @@ static struct fuse_lowlevel_ops fuse_path_ops = {
     .setlk = fuse_lib_setlk,
     .bmap = fuse_lib_bmap,
     .ioctl = fuse_lib_ioctl,
+    .fiemap = fuse_lib_fiemap,
 };
 
 struct fuse_session *fuse_get_session(struct fuse *f)

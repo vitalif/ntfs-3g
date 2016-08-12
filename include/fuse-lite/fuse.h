@@ -48,6 +48,8 @@ struct fuse_cmd;
 typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
 				const struct stat *stbuf, off_t off);
 
+struct fuse_fiemap_extent;
+
 /**
  * The file system operations:
  *
@@ -441,10 +443,47 @@ struct fuse_operations {
 	 */
  	unsigned int flag_nullpath_ok : 1;
 	/**
+	 * Map file range to device blocks, returning extents
+	 *
+	 * Just like bmap, this makes sense only for block device backed
+	 * filesystems mounted with the 'blkdev' option
+	 *
+	 * (*extents_mapped) should be set to extent count in the given range,
+	 * even if extents_max is 0. extent data should be written to extents[].
+	 */
+	int (*fiemap) (const char *, uint64_t start, uint64_t len,
+		uint32_t flags, uint32_t extents_max,
+		uint32_t *extents_mapped, struct fuse_fiemap_extent *extents);
+
+	/**
  	 * Reserved flags, don't set
  	 */
 	unsigned int flag_reserved : 30;
  
+};
+
+#define FUSE_FIEMAP_FLAG_SYNC	0x00000001 /* sync file data before map */
+#define FUSE_FIEMAP_FLAG_XATTR	0x00000002 /* map extended attribute tree */
+#define FUSE_FIEMAP_FLAG_CACHE	0x00000004 /* request caching of the extents */
+
+#define FUSE_FIEMAP_EXTENT_LAST		0x00000001 /* Last extent in file. */
+#define FUSE_FIEMAP_EXTENT_UNKNOWN		0x00000002 /* Data location unknown. */
+#define FUSE_FIEMAP_EXTENT_DELALLOC		0x00000004 /* Location still pending. Sets EXTENT_UNKNOWN. */
+#define FUSE_FIEMAP_EXTENT_ENCODED		0x00000008 /* Data can not be read while fs is unmounted */
+#define FUSE_FIEMAP_EXTENT_DATA_ENCRYPTED	0x00000080 /* Data is encrypted by fs. Sets EXTENT_NO_BYPASS. */
+#define FUSE_FIEMAP_EXTENT_NOT_ALIGNED	0x00000100 /* Extent offsets may not be block aligned. */
+#define FUSE_FIEMAP_EXTENT_DATA_INLINE	0x00000200 /* Data mixed with metadata. Sets EXTENT_NOT_ALIGNED.*/
+#define FUSE_FIEMAP_EXTENT_DATA_TAIL		0x00000400 /* Multiple files in block. Sets EXTENT_NOT_ALIGNED.*/
+#define FUSE_FIEMAP_EXTENT_UNWRITTEN		0x00000800 /* Space allocated, but no data (i.e. zero). */
+#define FUSE_FIEMAP_EXTENT_MERGED		0x00001000 /* File does not natively support extents. Result merged for efficiency. */
+#define FUSE_FIEMAP_EXTENT_SHARED		0x00002000 /* Space shared with other files. */
+
+struct fuse_fiemap_extent {
+	uint64_t	logical; /* logical offset in bytes for the start of the extent from the beginning of the file */
+	uint64_t	physical; /* physical offset in bytes for the start of the extent from the beginning of the disk */
+	uint64_t	length; /* length in bytes for this extent */
+	uint32_t	flags; /* FUSE_FIEMAP_EXTENT_* flags for this extent */
+	uint32_t	padding;
 };
 
 /** Extra context that may be needed by some filesystems
@@ -617,6 +656,9 @@ int fuse_fs_removexattr(struct fuse_fs *fs, const char *path,
 			const char *name);
 int fuse_fs_bmap(struct fuse_fs *fs, const char *path, size_t blocksize,
 		 uint64_t *idx);
+int fuse_fs_fiemap(struct fuse_fs *fs, const char *path,
+		uint64_t start, uint64_t len, uint32_t flags, uint32_t extents_max,
+		uint32_t *extents_mapped, struct fuse_fiemap_extent *extents);
 int fuse_fs_ioctl(struct fuse_fs *fs, const char *path, int cmd, void *arg,
 		  struct fuse_file_info *fi, unsigned int flags, void *data);
 void fuse_fs_init(struct fuse_fs *fs, struct fuse_conn_info *conn);

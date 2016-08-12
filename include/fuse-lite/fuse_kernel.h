@@ -188,6 +188,7 @@ enum fuse_opcode {
 	FUSE_BMAP          = 37,
 	FUSE_DESTROY       = 38,
 	FUSE_IOCTL         = 39,
+	FUSE_FIEMAP        = 47,
 };
 
 /* The read buffer is required to be at least 8k, but may be much larger */
@@ -406,6 +407,13 @@ struct fuse_ioctl_out {
 	__u32	flags;
 	__u32	in_iovs;
 	__u32	out_iovs;
+};
+
+struct fuse_fiemap_in {
+	__u32	flags;
+	__u32	extents_max;
+	__u64	start;
+	__u64	len;
 };
 
 struct fuse_in_header {
